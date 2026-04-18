@@ -1,0 +1,114 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validation Helpers ---
+    
+    function isValidUser(data) {
+      let requiredFields = ['uid', 'email', 'createdAt'];
+      return data.keys().hasAll(requiredFields)
+        && data.keys().size() >= 3
+        && data.uid == request.auth.uid
+        && data.email is string && data.email.size() > 0 && data.email.size() < 200
+        && data.createdAt == request.time
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100))
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 500))
+        && (!('plan' in data) || (data.plan is string && data.plan.size() < 50))
+        && (!('company' in data) || (data.company is string && data.company.size() < 100))
+        && (!('bio' in data) || (data.bio is string && data.bio.size() < 1000))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() < 30));
+    }
+
+    function isValidProject(data) {
+      let requiredFields = ['userId', 'email', 'projectName', 'createdAt'];
+      return data.keys().hasAll(requiredFields)
+        && data.userId == request.auth.uid
+        && data.email is string && data.email == request.auth.token.email
+        && data.projectName is string && data.projectName.size() > 0 && data.projectName.size() < 100
+        && data.createdAt == request.time
+        && (!('description' in data) || (data.description is string && data.description.size() < 2000))
+        && (!('budget' in data) || (data.budget is string && data.budget.size() < 50))
+        && (!('status' in data) || (data.status is string && data.status in ['pending', 'reviewing', 'accepted', 'rejected']));
+    }
+
+    function isValidLead(data) {
+      let requiredFields = ['email', 'name', 'createdAt'];
+      return data.keys().hasAll(requiredFields)
+        && data.email is string && data.email.size() > 0 && data.email.size() < 200
+        && data.name is string && data.name.size() > 0 && data.name.size() < 100
+        && data.createdAt == request.time
+        && (!('phone' in data) || (data.phone is string && data.phone.size() < 30))
+        && (!('company' in data) || (data.company is string && data.company.size() < 100))
+        && (!('website' in data) || (data.website is string && data.website.size() < 200))
+        && (!('industry' in data) || (data.industry is string && data.industry.size() < 100))
+        && (!('revenue' in data) || (data.revenue is string && data.revenue.size() < 100))
+        && (!('spend' in data) || (data.spend is string && data.spend.size() < 100))
+        && (!('bottleneck' in data) || (data.bottleneck is string && data.bottleneck.size() < 5000))
+        && (!('formType' in data) || (data.formType is string && data.formType.size() < 100));
+    }
+
+    function isValidSubscriber(data) {
+      let requiredFields = ['email', 'createdAt'];
+      return data.keys().hasAll(requiredFields)
+        && data.keys().size() == 2
+        && data.email is string && data.email.size() > 0 && data.email.size() < 200
+        && data.createdAt == request.time;
+    }
+
+    // --- Collection Routes ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUser(incoming())
+                   && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'plan', 'company', 'bio', 'phone']);
+    }
+
+    match /projects/{projectId} {
+      allow get: if isSignedIn() && isValidId(projectId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(projectId) && isValidProject(incoming());
+      allow update: if isSignedIn() && isValidId(projectId) && existing().userId == request.auth.uid 
+                   && isValidProject(incoming())
+                   && incoming().diff(existing()).affectedKeys().hasOnly(['projectName', 'description', 'budget', 'status']);
+    }
+
+    match /leads/{leadId} {
+      allow create: if isValidId(leadId) && isValidLead(incoming());
+      // Leads are only readable by privileged access (not defined in client rules)
+      allow read: if false;
+    }
+
+    match /subscribers/{subscriberId} {
+      allow create: if isValidId(subscriberId) && isValidSubscriber(incoming());
+      // Subscribers are only readable by privileged access
+      allow read: if false;
+    }
+  }
+}
